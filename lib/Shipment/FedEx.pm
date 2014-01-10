@@ -738,7 +738,12 @@ sub ship {
       };
 
       if ( $self->from_address()->country_code ne $self->to_address()->country_code ) {
-        $shipment_arguments->{RequestedShipment}{CustomsClearanceDetail} = {
+        if ( !$package->contents ) {
+          $self->error( 'Cross-border shipment without specifying contents' ); 
+          last;
+        }
+
+        my $detail = {
           DutiesPayment => {
             PaymentType => 'SENDER',
             Payor => {
@@ -746,30 +751,52 @@ sub ship {
               CountryCode => $self->from_address()->country_code,
             },
           },
-          # This claimst to be required, but isn't and doesn't seem to affect
-          # the need for the Commodities entry.
           #DocumentContent => 'DOCUMENTS_ONLY',
-          CustomsValue => {
-            Currency => $self->currency,
-            Amount => $total_insured_value,
-          },
-          # 'Commodities' => 'Shipment::FedEx::WSDL::ShipTypes::Commodity',
-          Commodities => {
-            NumberOfPieces => 1,
-            Description => 'Some Description',
-            CountryOfManufacture => $self->from_address()->country_code,
+        };
+        my @contents;
+        my $total_customs_value = 0;
+        foreach my $content ( @{$package->contents} ) {
+          my $commodity = {
+            NumberOfPieces => $content->number_of_pieces // 1,
+            Description => $content->description,
+            CountryOfManufacture => $content->country_of_manufacture // $self->from_address()->country_code,
             Weight => {
-              Value => $package->weight,
+              Value => $content->weight // $package->weight,
               Units => $units_type_map{$self->weight_unit} || $self->weight_unit,
             },
-            Quantity => 1,
-            QuantityUnits => 'EA',
+            Quantity => $content->quantity // 1,
+            QuantityUnits => $content->quantity_units // 'EA',
             UnitPrice => {
               Currency => $self->currency,
-              Amount => $package->insured_value->value,
+              Amount => $content->unit_price // $package->insured_value->value,
             },
-          },
+          };
+
+          $commodity->{Name} = $content->name if $content->name;
+          $commodity->{HarmonizedCode} = $content->harmonized_code if $content->harmonized_code;
+          $commodity->{AdditionalMeasures} = $content->additional_measures if $content->additional_measures;
+          if ($content->customs_value) {
+            $commodity->{CustomsValue} = $content->customs_value;
+            $total_customs_value += $content->customs_value;
+          }
+          $commodity->{ExciseConditions} = $content->excise_conditions if $content->excise_conditions;
+          if ($content->export_license_number) {
+            $commodity->{ExportLicenseNumber} = $content->export_license_number;
+            $commodity->{ExportLicenseExpirationDate} = $content->export_license_expiration_date;
+          }
+          $commodity->{CIMarksAndNumbers} = $content->ci_marks_and_numbers if $content->ci_marks_and_numbers;
+
+          push @contents, $commodity;
+        }
+        $detail->{Commodities} = \@contents;
+
+        $detail->{CustomsValue} = {
+          Currency => $self->currency,
+          Amount => $total_customs_value || $package->insured_value->value,
         };
+
+        $shipment_arguments->{RequestedShipment}{CustomsClearanceDetail}
+          = $detail;
       }
 
       $response = $interface->processShipment( $shipment_arguments );

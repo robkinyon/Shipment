@@ -204,6 +204,19 @@ has 'cost' => (
   default => sub { Data::Currency->new(0) },
 );
 
+=head2 contents
+
+The optional contents of the package, needed to determine customs information.
+
+type: array of Shipment::Package::Contents
+
+=cut
+
+has 'contents' => (
+  is => 'rw',
+  isa => 'ArrayRef[Shipment::Package::Contents]',
+);
+
 no Moose;
 
 =head1 AUTHOR
